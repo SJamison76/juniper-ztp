@@ -1,0 +1,7 @@
+# Junos image files
+code/
+*.tgz
+
+# System files
+*.swp
+*.log
