@@ -1,4 +1,4 @@
-version 2.3;
+version 2.4;
 /* Junos standard namespaces */
 ns junos = "http://xml.juniper.net/junos/*/junos";
 ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
@@ -9,14 +9,13 @@ ns func extension = "http://exslt.org/functions";
 ns ztp = "http://xml.juniper.net/junos/ztp";
 import "/var/run/scripts/import/junos.xsl";
 
-param $ex2300 = "23.2R2-S7.5";
+param $ex2300 = "23.4R2-S8.7";
 param $ex3400 = "18.2R3-S2.9";
 param $ex4100 = "23.4R2-S8.7";
 param $ex4600 = "18.3R2.7";
 param $ex4650 = "23.4R2-S8.7";
 param $mx204 = "23.4R2-S8.7";
 param $srx300 = "23.4R2-S8.7";
-
 param $server = "192.168.10.1";
 param $reset="no";
 
@@ -35,8 +34,8 @@ var $SYSLOG = "external.notice";
 
 /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 * !!!!! MAIN ENTRY !!!!!
-* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
-
+* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+*/
 
 match / {
         /* Open a connection to the device */
@@ -48,7 +47,6 @@ match / {
         /*Get serial number of current device */
         var $serial = ztp:serial-number( $jnx );
         var $SYSLOG_TAG = " " _ $serial _ " - ";
-
         /* Check if script is already running */
         if( ztp:is-already-running( $jnx ) ) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Script already running - stopping the script" );
@@ -57,22 +55,23 @@ match / {
         else {
             expr ztp:set-tracker( $jnx );
         }
-        /* Get device model */
-        var $modele = ztp:hardware-type( $jnx );
+        /* Get device model and translate to UPPERCASE to prevent case-mismatch bugs */
+        var $modele-raw = ztp:hardware-type( $jnx );
+        var $modele = translate($modele-raw, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
         /* Get Junos current version */
         var $current = ztp:junos-version( $jnx );
-        
-        /* Fixed Variable Typos here */
+
         if( not ($modele == "EX2300" || $modele == "EX3400" || $modele == "EX4600" || $modele == "EX4100" || $modele == "EX4650" || $modele == "SRX300" || $modele == "MX204" )) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Impossible to identify current device model or model not implemented: ", $modele, " - aborting script" );
             expr ztp:end-script( $jnx );
         }
         
-        /* Fixed: Passed all 7 required arguments to function */
-        var $target-version-number = ztp:get-target-version-number( $modele, $ex2300, $ex3400, $ex4600, $ex4650, $mx204, $srx300 );
+        /* Updated: Dynamically pass all 8 targeting variables to line up with upper parameter declarations */
+        var $target-version-number = ztp:get-target-version-number( $modele, $ex2300, $ex3400, $ex4100, $ex4600, $ex4650, $mx204, $srx300 );
         var $target-version-name = ztp:get-target-version-name( $modele, $target-version-number );
         expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device is ", $modele, " currently running on Junos ", $current );
-
+        
         /*** Software version Test ***/
         if( $target-version-number == "" ){
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "No target version defined - Aborting Script." );
@@ -82,7 +81,6 @@ match / {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device will be upgraded to Junos ", $target-version-number, " ... " );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Download and upgrade in progress..." );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Downloading Software from ", $JUNOS-DIR, $target-version-name );
-        
             /*** Freeing up disk space ***/
             var $rm-previous = ztp:rm-previous ( $jnx );
             var $rm-old = ztp:rm-old ( $jnx );
@@ -102,7 +100,6 @@ match / {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device will reboot now" );
             var $cmd-reb = <request-reboot>;
             expr ztp:end-script-if-error( $jnx, $SYSLOG_TAG, jcs:execute( $jnx, $cmd-reb ) , "An error occurred during software reboot - Aborting Script." );
-
             <xsl:message terminate="yes">;
         }
         else if( $current == $target-version-number ) { 
@@ -125,8 +122,8 @@ match / {
             var $snapshot = ztp:snapshot ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "All snapshots completed." );
         };
-
-        /*** Removing event options configuration safely (Fixed to avoid wiping management interfaces) ***/
+        
+        /*** Removing event options configuration safely ***/
         var $config-changes = <configuration> {
             <event-options delete="delete">;
             <system> {
@@ -136,11 +133,13 @@ match / {
         
         var $load-action = "merge";
         var $conn_handle = jcs:open();
-        /* Fixed: Replaced := operator with clean single assignment syntax */
         var $results = {
             call jcs:load-configuration( $action=$load-action, $configuration=$config-changes, $connection=$conn_handle );
         }
         
-        /* Check if the configuration load actually threw an error */
+        /* Fixed: Correctly closed syntax formatting block */
         if ($results//xnm:error) {
-            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "ERROR: Failed to change hostname to staging-complete: ", $results//xnm:error
+            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "ERROR: Failed to change hostname to staging-complete: ", $results//xnm:error);
+        } else {
+            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "Hostname successfully changed to staging-complete.");
+        }
