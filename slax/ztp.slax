@@ -1,4 +1,4 @@
-version 2.1;
+version 2.3;
 /* Junos standard namespaces */
 ns junos = "http://xml.juniper.net/junos/*/junos";
 ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
@@ -28,7 +28,8 @@ var $TMP-DIR = "/tmp/";
 var $CONFIG-DIR = "ftp://" _ $server _ "/config/";
 var $UPLOAD-DIR = "ftp://" _ $server _ "/uploads/";
 var $JUNOS-DIR = "ftp://" _ $server _ "/code/";
-var $EVENT-POLICY = "staging"; /* as defined in staging.conf file */
+var $EVENT-POLICY = "staging";
+/* as defined in staging.conf file */
 var $SYSLOG = "external.notice";
 
 
@@ -105,7 +106,7 @@ match / {
             <xsl:message terminate="yes">;
         }
         else if( $current == $target-version-number ) { 
-            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device is already running the target software release - no need to upgrade" ); 
+            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device is already running the target software release - no need to upgrade" );
         }
 
         /*** Snapshots ***/
@@ -118,17 +119,16 @@ match / {
             var $rm-previous-snap = ztp:rm-previous ( $jnx );
             var $rm-old-snap = ztp:rm-old ( $jnx );
             var $disk-space-snap = ztp:disk-space ( $jnx );
-            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Freed up disk space for snapshots." ); 
+            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Freed up disk space for snapshots." );
             var $snapshot-recovery = ztp:snapshot-recovery ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Snapshot recovery complete." );
             var $snapshot = ztp:snapshot ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "All snapshots completed." );
         };
 
-        /*** Removing event options configuration (Fixed XML syntax) ***/
+        /*** Removing event options configuration safely (Fixed to avoid wiping management interfaces) ***/
         var $config-changes = <configuration> {
             <event-options delete="delete">;
-            <interfaces delete="delete">;
             <system> {
                 <host-name> "staging-complete";
             }
@@ -136,7 +136,6 @@ match / {
         
         var $load-action = "merge";
         var $conn_handle = jcs:open();
-        
         /* Fixed: Replaced := operator with clean single assignment syntax */
         var $results = {
             call jcs:load-configuration( $action=$load-action, $configuration=$config-changes, $connection=$conn_handle );
@@ -144,227 +143,4 @@ match / {
         
         /* Check if the configuration load actually threw an error */
         if ($results//xnm:error) {
-            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "ERROR: Failed to change hostname to staging-complete: ", $results//xnm:error/message);
-        } else {
-            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Removed event options and transitioned to staging-complete successfully." );
-        }
-        
-        expr ztp:end-script( $jnx );
-}
-
-
-
-/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
- * !!!!! "Helper" Functions/Templates !!!!!
- * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
- 
-<func:function name="ztp:disk-space"> {
-    param $jnx;
-    var $rpc = <request-shell-execute> {
-        <command> "df -ch /dev/gpt/junos";
-    };
-    var $disk-space = jcs:execute($jnx, $rpc);
-    <func:result select="$disk-space[1]">;
-}
-
-<func:function name="ztp:rm-previous"> {
-    param $jnx;
-    var $cmd = <request-shell-execute> {
-        <command> "pkg setop rm previous";
-    };
-    var $rm-previous = jcs:execute($jnx, $cmd);
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:rm-old"> {
-    param $jnx;
-    var $cmd = <request-shell-execute> {
-        <command> "pkg delete old";
-    };
-    var $rm-old = jcs:execute($jnx, $cmd);
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:snapshot-recovery"> {
-    param $jnx;
-    var $cmd = <request-snapshot> {
-        <recovery>;
-    };
-    var $snapshot-recovery = jcs:execute($jnx, $cmd);
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:snapshot"> {
-    param $jnx;
-    var $cmd = <request-snapshot>;
-    var $snapshot = jcs:execute($jnx, $cmd);
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:current-snapshot"> {
-    param $jnx;
-    var $cmd = <get-snapshot-information>;
-    var $res = jcs:execute( $jnx, $cmd );
-    var $current-snapshot = $res/multi-routing-engine-item/output;
-    <func:result select="$current-snapshot">; 
-}
-
-<func:function name="ztp:ping"> {
-     param $jnx;
-     param $_host_;
-     param $_source_;
-     var $cmd = <ping> { 
-        <host> $_host_;
-        <no-resolve>;
-        <source> $_source_;
-        <count> 1;
-    };
-    var $rsp = jcs:execute( $jnx, $cmd );
-    <func:result select="exsl:node-set($rsp)">; 
-}
-
-<func:function name="ztp:get-target-version-number"> {
-    param $_modele_;
-    param $_ex2300_;
-    param $_ex3400_;
-    param $_ex4600_;
-    param $_ex4650_;
-    param $_mx204_;
-    param $_srx300_;
-    
-    if ( $_modele_ == "EX2300" ) { <func:result select="string($_ex2300_)">; }
-    else if ( $_modele_ == "EX3400" ) { <func:result select="string($_ex3400_)">; }
-    else if ( $_modele_ == "EX4100" ) { <func:result select="string($_ex4650_)">; } 
-    else if ( $_modele_ == "EX4600" ) { <func:result select="string($_ex4600_)">; }
-    else if ( $_modele_ == "EX4650" ) { <func:result select="string($_ex4650_)">; }
-    else if ( $_modele_ == "SRX300" ) { <func:result select="string($_srx300_)">; }
-    else if ( $_modele_ == "MX204" ) { <func:result select="string($_mx204_)">; }    
-}
-
-<func:function name="ztp:get-target-version-name"> {
-    param $_modele_;
-    param $_target-version_;
-    var $JUNOS-EX2300 = "junos-arm-32-" _ $_target-version_ _ ".tgz";
-    var $JUNOS-EX3400 = "junos-arm-32-" _ $_target-version_ _ ".tgz";
-    var $JUNOS-EX4100 = "junos-install-ex-arm-64-" _ $_target-version_ _ ".tgz";
-    var $JUNOS-EX4650 = "jinstall-host-ex-4e-x86-64-" _ $_target-version_ _ ".tgz";
-    var $JUNOS-MX204 = "junos-vmhost-install-mx-x86-64-" _ $_target-version_ _ ".tgz";
-    var $JUNOS-EX4600 = "jinstall-host-ex-4600-" _ $_target-version_ _ "-signed.tgz";
-    var $JUNOS-SRX300 = "junos-srxsme-" _ $_target-version_ _ ".tgz";
-    
-    if( $_modele_ == "EX2300" ) { <func:result select="string($JUNOS-EX2300)">; }
-    else if ( $_modele_ == "EX3400" ) { <func:result select="string($JUNOS-EX3400)">; }
-    else if ( $_modele_ == "EX4100" ) { <func:result select="string($JUNOS-EX4100)">; }
-    else if ( $_modele_ == "EX4600" ) { <func:result select="string($JUNOS-EX4600)">; }
-    else if ( $_modele_ == "EX4650" ) { <func:result select="string($JUNOS-EX4650)">; }
-    else if ( $_modele_ == "SRX300" ) { <func:result select="string($JUNOS-SRX300)">; }
-    else if ( $_modele_ == "MX204" ) { <func:result select="string($JUNOS-MX204)">; }    
-}
-
-<func:function name="ztp:junos-version"> {
-    param $jnx;
-    var $cmd = <get-configuration> { 
-        <configuration> { 
-            <version>; 
-        }
-    };
-    var $ver = jcs:execute( $jnx, $cmd )//version;
-    <func:result select="$ver">; 
-}
-
-<func:function name="ztp:hardware-type"> {
-    param $jnx;
-    var $cmd = <get-chassis-inventory>;
-    var $res = jcs:execute( $jnx, $cmd );
-    var $model-full = $res/chassis/description;
-    var $model = jcs:split("-", $model-full);
-    <func:result select="$model[1]">; 
-}
-
-<func:function name="ztp:serial-number"> {
-    param $jnx;
-    var $cmd = <get-chassis-inventory>;
-    var $res = jcs:execute( $jnx, $cmd );
-    var $model-full = $res/chassis/serial-number;
-    <func:result select="$model-full[1]">; 
-}
-
-<func:function name="ztp:set-tracker"> {
-    param $jnx;
-    var $cmd = <request-snmp-utility-mib-set> {
-        <object-type> "integer";
-        <instance> "staging";
-        <object-value> "1";
-    };
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">; 
-}
-
-<func:function name="ztp:remove-tracker"> {
-    param $jnx;
-    var $cmd = <request-snmp-utility-mib-set> {
-        <object-type> "integer";
-        <instance> "staging";
-        <object-value> "0";
-    };
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">; 
-}
-
-<func:function name="ztp:is-already-running"> {
-    param $jnx;
-    var $cmd = <get-snmp-object> {
-        <snmp-object-name>"jnxUtilIntegerValue.115.116.97.103.105.110.103";
-    };
-    var $res = jcs:execute( $jnx, $cmd )//snmp-object/object-value;
-    if ( $res == "1" ) { <func:result select="true()">; }
-    else { <func:result select="false()">; }
-}
-
-<func:function name="ztp:end-script"> {
-    param $jnx;
-    var $res = ztp:remove-tracker($jnx);
-    expr jcs:close( $jnx );
-    <xsl:message terminate="yes">;
-    <func:result select="true()">; 
-}
-
-<func:function name="ztp:end-script-if-error"> {
-    param $jnx;
-    param $_SYSLOG_TAG_;
-    param $_result_;
-    param $_log_;
-    if( $_result_//self::xnm:error ) {
-        expr jcs:syslog( $SYSLOG, $_SYSLOG_TAG_, $_log_, " - STOP" );
-        expr jcs:syslog( $SYSLOG, $_SYSLOG_TAG_, "ERROR : ", $_result_//self::xnm:error/message );
-        expr ztp:end-script( $jnx );
-    }
-    <func:result select="true()">; 
-}
-
-<func:function name="ztp:load-config"> {
-     param $jnx;
-     param $load-cmd;
-     var $load-rsp = jcs:execute( $jnx, $load-cmd );
-     if( $load-rsp//self::xnm:error ) {
-        call syslog-messages( $header = "Unable to load configuration", $messages = $load-rsp//self::xnm:error/message );
-        <func:result select="$load-rsp//self::xnm:error">;
-     }
-     else {
-        var $commit-rsp = jcs:execute( $jnx, "commit-configuration" );
-        if( $commit-rsp//self::xnm:error ) {
-            call syslog-messages( $header = "unable to commit configuration", $messages = $commit-rsp//self::xnm:error/message );
-            <func:result select="exsl:node-set($commit-rsp//self::xnm:error)">; 
-        }
-        else {
-            <func:result select="/null">; /* Fixed: Added missing closing bracket here */
-        }
-    }
-}
-
-template syslog-messages( $header, $messages ) {
-    expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, $header );
-    for-each( $messages ) {
-        expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "message[ ", ., "]");
-    }
-}
+            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "ERROR: Failed to change hostname to staging-complete: ", $results//xnm:error
