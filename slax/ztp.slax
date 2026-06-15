@@ -1,4 +1,4 @@
-version 2.5.2;
+version 2.5.1;
 /* Junos standard namespaces */
 ns junos = "http://xml.juniper.net/junos/*/junos";
 ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
@@ -256,14 +256,14 @@ match / {
 }
 
 /* ------------------------------------------------- */
-/* this function removes large runtime db files      */
-/* and snapshots to free up disk space               */
+/* this function removes large runtime db files,     */
+/* schema cache, and snapshots to free up disk space */
 /* ------------------------------------------------- */
 <func:function name="ztp:rm-rundb"> {
     param $jnx;
     var $cmd1 = {
         <request-shell-execute> {
-            <command> "rm -f /var/rundb/render.db /var/rundb/schema.db";
+            <command> "rm -f /var/rundb/render.db /var/rundb/schema.db && rm -rf /var/tmp/.schema-cache";
         }
     }
     var $rm-rundb = jcs:execute($jnx, $cmd1);
