@@ -1,4 +1,4 @@
-version 2.5.1;
+version 2.5.2;
 /* Junos standard namespaces */
 ns junos = "http://xml.juniper.net/junos/*/junos";
 ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
@@ -93,6 +93,7 @@ match / {
             /*** Freeing up disk space ***/
             var $rm-previous = ztp:rm-previous ( $jnx );
             var $rm-old = ztp:rm-old ( $jnx );
+            var $rm-rundb = ztp:rm-rundb ( $jnx );
             var $disk-space = ztp:disk-space ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Freed up disk space" );
 
@@ -124,6 +125,7 @@ match / {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Taking snapshots...this is going to take awhile." );
             var $rm-previous-snap = ztp:rm-previous ( $jnx );
             var $rm-old-snap = ztp:rm-old ( $jnx );
+            var $rm-rundb-snap = ztp:rm-rundb ( $jnx );
             var $disk-space-snap = ztp:disk-space ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Freed up disk space for snapshots." );
             var $snapshot-recovery = ztp:snapshot-recovery ( $jnx );
@@ -250,6 +252,25 @@ match / {
         }
     }
     var $rm-old = jcs:execute($jnx, $cmd);
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function removes large runtime db files      */
+/* and snapshots to free up disk space               */
+/* ------------------------------------------------- */
+<func:function name="ztp:rm-rundb"> {
+    param $jnx;
+    var $cmd1 = {
+        <request-shell-execute> {
+            <command> "rm -f /var/rundb/render.db /var/rundb/schema.db";
+        }
+    }
+    var $rm-rundb = jcs:execute($jnx, $cmd1);
+    var $cmd2 = <request-snapshot-delete> {
+        <all>;
+    }
+    var $rm-snapshots = jcs:execute($jnx, $cmd2);
     <func:result select="true()">;
 }
 
