@@ -5,7 +5,13 @@ echo "Installing required packages..."
 sudo apt install -y vsftpd isc-dhcp-server
 
 echo "Creating FTP directory structure..."
-sudo mkdir -p /srv/ftp/code
+sudo mkdir -p /srv/ftp/code/EX2300
+sudo mkdir -p /srv/ftp/code/EX3400
+sudo mkdir -p /srv/ftp/code/EX4100
+sudo mkdir -p /srv/ftp/code/EX4600
+sudo mkdir -p /srv/ftp/code/EX4650
+sudo mkdir -p /srv/ftp/code/MX204
+sudo mkdir -p /srv/ftp/code/SRX300
 sudo mkdir -p /srv/ftp/slax
 sudo mkdir -p /srv/ftp/config
 
