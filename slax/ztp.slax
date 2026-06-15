@@ -1,4 +1,4 @@
-version 2.4.3;
+version 2.5.1;
 /* Junos standard namespaces */
 ns junos = "http://xml.juniper.net/junos/*/junos";
 ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
@@ -40,17 +40,17 @@ var $SYSLOG = "external.notice";
 match / {
         /* Open a connection to the device */
         var $jnx = jcs:open();
-        
+
         /* If RESET parameter is not equal to NO, we stop the script and reinitialize the tracker */
         if($reset != "no"){
             expr ztp:end-script( $jnx );
         }
-        
+
         /*Get serial number of current device */
         var $serial = ztp:serial-number( $jnx );
         var $SYSLOG_TAG = " " _ $serial _ " - ";
-        
-        /* Check if script is already running */
+
+        /* Check if script is already running, if it is, we stop the script. If not, we set the tracker within the Utility mib */
         if( ztp:is-already-running( $jnx ) ) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Script already running - stopping the script" );
             <xsl:message terminate="yes">;
@@ -58,7 +58,7 @@ match / {
         else {
             expr ztp:set-tracker( $jnx );
         }
-        
+
         /* Get device model and translate to UPPERCASE to prevent case-mismatch bugs */
         var $modele-raw = ztp:hardware-type( $jnx );
         var $modele = translate($modele-raw, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ');
@@ -66,29 +66,30 @@ match / {
         /* Get Junos current version */
         var $current = ztp:junos-version( $jnx );
 
+        /* Check if device type corresponds to something expected */
         if( not ($modele == "EX2300" || $modele == "EX3400" || $modele == "EX4600" || $modele == "EX4100" || $modele == "EX4650" || $modele == "SRX300" || $modele == "MX204" )) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Impossible to identify current device model or model not implemented: ", $modele, " - aborting script" );
             expr ztp:end-script( $jnx );
         }
-        
-        /* Dynamically pass all 8 targeting variables */
+
+        /* based on model type we get target version number and target version name */
         var $target-version-number = ztp:get-target-version-number( $modele, $ex2300, $ex3400, $ex4100, $ex4600, $ex4650, $mx204, $srx300 );
-        
+
         /* This variable will now equal something like "EX2300/junos-arm-32-23.4R2-S8.7.tgz" */
         var $target-version-name = ztp:get-target-version-name( $modele, $target-version-number );
-        
+
         expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device is ", $modele, " currently running on Junos ", $current );
-        
-        /*** Software version Test ***/
+
+        /*** check if upgrade is necessary ***/
         if( $target-version-number == "" ){
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "No target version defined - Aborting Script." );
             expr ztp:end-script( $jnx );
         }
         else if( $current != $target-version-number ) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device will be upgraded to Junos ", $target-version-number, " ... " );
-            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Download and upgrade in progress..." );
+            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Download and upgrade in progress... (this may take some time so grab a cup of coffee)" );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Downloading Software from ", $JUNOS-DIR, $target-version-name );
-            
+
             /*** Freeing up disk space ***/
             var $rm-previous = ztp:rm-previous ( $jnx );
             var $rm-old = ztp:rm-old ( $jnx );
@@ -97,7 +98,7 @@ match / {
 
             /*** Starting install ***/
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Starting install of ", $target-version-number );
-            var $cmd-ver = <request-package-add> { 
+            var $cmd-ver = <request-package-add> {
                 <package-name> $JUNOS-DIR _ $target-version-name;
                 <force>;
                 <unlink>;
@@ -110,14 +111,14 @@ match / {
             expr ztp:end-script-if-error( $jnx, $SYSLOG_TAG, jcs:execute( $jnx, $cmd-reb ) , "An error occurred during software reboot - Aborting Script." );
             <xsl:message terminate="yes">;
         }
-        else if( $current == $target-version-number ) { 
+        else if( $current == $target-version-number ) {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Device is already running the target software release - no need to upgrade" );
         }
 
         /*** Snapshots ***/
         var $current-snapshot = ztp:current-snapshot ( $jnx );
         if ( contains( $current-snapshot, $target-version-number )) {
-            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Snapshots already exist dummy." );
+            expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Snapshots already exist." );
         }
         else {
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Taking snapshots...this is going to take awhile." );
@@ -130,37 +131,34 @@ match / {
             var $snapshot = ztp:snapshot ( $jnx );
             expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "All snapshots completed." );
         };
-        
-        /*** Removing event options configuration safely ***/
-        var $config-changes = <configuration> {
-            <event-options delete="delete">;
-            <system> {
-                <host-name> "staging-complete";
+
+        /*** Removing event options configuration ***/
+        var $config-changes = {
+            <configuration> {
+                <event-options delete="delete">;
+
+                <system> {
+                    <host-name> "staging-complete";
+                }
             }
-        };
-        
+        }
         var $load-action = "merge";
         var $conn_handle = jcs:open();
-        var $results = {
+        var $results := {
             call jcs:load-configuration( $action=$load-action, $configuration=$config-changes, $connection=$conn_handle );
         }
-        
-        /* Correctly closed syntax formatting block */
-        if ($results//xnm:error) {
-            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "ERROR: Failed to change hostname to staging-complete: ", $results//xnm:error);
-        } else {
-            expr jcs:syslog($SYSLOG, $SYSLOG_TAG, "Hostname successfully changed to staging-complete.");
-        }
-        
-        /* Close out open runtime handles cleanly */
-        expr ztp:end-script($jnx);
+        expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "Removed event options." );
+        expr ztp:end-script( $jnx );
 }
 
-/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-* !!!!! CUSTOM FUNCTIONS !!!!!
-* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-*/
 
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ * !!!!! "Helper" Functions/Templates !!!!!
+ * !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+
+/* -------------------------------------------------------------------- */
+/* returns the right target junos version number based on model         */
+/* -------------------------------------------------------------------- */
 <func:function name="ztp:get-target-version-number"> {
     param $modele;
     param $ex2300;
@@ -171,135 +169,262 @@ match / {
     param $mx204;
     param $srx300;
 
-    if ($modele == "EX2300") { <func:result select="$ex2300">; }
-    else if ($modele == "EX3400") { <func:result select="$ex3400">; }
-    else if ($modele == "EX4100") { <func:result select="$ex4100">; }
-    else if ($modele == "EX4600") { <func:result select="$ex4600">; }
-    else if ($modele == "EX4650") { <func:result select="$ex4650">; }
-    else if ($modele == "MX204") { <func:result select="$mx204">; }
-    else if ($modele == "SRX300") { <func:result select="$srx300">; }
+    if ($modele == "EX2300") { <func:result select="string($ex2300)">; }
+    else if ($modele == "EX3400") { <func:result select="string($ex3400)">; }
+    else if ($modele == "EX4100") { <func:result select="string($ex4100)">; }
+    else if ($modele == "EX4600") { <func:result select="string($ex4600)">; }
+    else if ($modele == "EX4650") { <func:result select="string($ex4650)">; }
+    else if ($modele == "MX204") { <func:result select="string($mx204)">; }
+    else if ($modele == "SRX300") { <func:result select="string($srx300)">; }
     else { <func:result select="''">; }
 }
 
+/* -------------------------------------------------------------------- */
+/* returns the image filename with model subdirectory                   */
+/* EX2300: EX2300/junos-arm-32-[ver].tgz                               */
+/* EX4100: EX4100/junos-install-ex-arm-64-[ver].tgz                    */
+/* EX4600: EX4600/jinstall-host-ex-4600-[ver]-signed.tgz               */
+/* EX4650: EX4650/jinstall-host-ex-4e-x86-64-[ver]-secure-signed.tgz  */
+/* MX204:  MX204/junos-vmhost-install-mx-x86-64-[ver].tgz              */
+/* SRX300: SRX300/junos-srxsme-[ver].tgz                               */
+/* -------------------------------------------------------------------- */
 <func:function name="ztp:get-target-version-name"> {
     param $modele;
     param $version;
-    
+
     var $filename = {
         if ($modele == "EX2300" || $modele == "EX3400") {
             expr "junos-arm-32-" _ $version _ ".tgz";
-        } else if ($modele == "EX4100" || $modele == "EX4650" || $modele == "MX204" || $modele == "EX4600") {
-            expr "junos-x86-64-" _ $version _ ".tgz";
+        } else if ($modele == "EX4100") {
+            expr "junos-install-ex-arm-64-" _ $version _ ".tgz";
+        } else if ($modele == "EX4600") {
+            expr "jinstall-host-ex-4600-" _ $version _ "-signed.tgz";
+        } else if ($modele == "EX4650") {
+            expr "jinstall-host-ex-4e-x86-64-" _ $version _ "-secure-signed.tgz";
+        } else if ($modele == "MX204") {
+            expr "junos-vmhost-install-mx-x86-64-" _ $version _ ".tgz";
         } else if ($modele == "SRX300") {
             expr "junos-srxsme-" _ $version _ ".tgz";
         }
     }
-    /* THIS appends the hardware folder directory perfectly: Model/filename */
+    /* Appends the model subdirectory: EX2300/junos-arm-32-23.2R2-S7.5.tgz */
     <func:result select="$modele _ '/' _ $filename">;
 }
 
+/* ------------------------------------------------- */
+/* this function is used get disk space */
+/* ------------------------------------------------- */
+<func:function name="ztp:disk-space"> {
+    param $jnx;
+    var $rpc = {
+        <request-shell-execute> {
+            <command> "df -ch /dev/gpt/junos";
+        }
+    }
+    var $disk-space = jcs:execute($jnx, $rpc);
+    <func:result select="$disk-space[1]">;
+}
+
+/* ------------------------------------------------- */
+/* this function is to remove software remnants */
+/* ------------------------------------------------- */
+<func:function name="ztp:rm-previous"> {
+    param $jnx;
+    var $cmd = {
+        <request-shell-execute> {
+            <command> "pkg setop rm previous";
+        }
+    }
+    var $rm-previous = jcs:execute($jnx, $cmd);
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to remove previous packages */
+/* ------------------------------------------------- */
+<func:function name="ztp:rm-old"> {
+    param $jnx;
+    var $cmd = {
+        <request-shell-execute> {
+            <command> "pkg delete old";
+        }
+    }
+    var $rm-old = jcs:execute($jnx, $cmd);
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to take a recovery snapshot */
+/* ------------------------------------------------- */
+<func:function name="ztp:snapshot-recovery"> {
+    param $jnx;
+    var $cmd = {
+        <request-snapshot> {
+            <recovery>;
+        }
+    }
+    var $snapshot-recovery = jcs:execute($jnx, $cmd);
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to take a snapshot */
+/* ------------------------------------------------- */
+<func:function name="ztp:snapshot"> {
+    param $jnx;
+    var $cmd = {
+        <request-snapshot>;
+    }
+    var $snapshot = jcs:execute($jnx, $cmd);
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to see if snapshots are present */
+/* ------------------------------------------------- */
+<func:function name="ztp:current-snapshot"> {
+    param $jnx;
+    var $cmd = <get-snapshot-information>;
+    var $res = jcs:execute( $jnx, $cmd );
+    var $current-snapshot = $res/multi-routing-engine-item/output;
+    <func:result select="$current-snapshot">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to get the software version */
+/* ------------------------------------------------- */
+<func:function name="ztp:junos-version"> {
+    param $jnx;
+    var $cmd = <get-configuration> {
+        <configuration> {
+            <version>;
+        }
+    }
+    var $ver = jcs:execute( $jnx, $cmd )//version;
+    <func:result select="$ver">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to get hardware type */
+/* ------------------------------------------------- */
 <func:function name="ztp:hardware-type"> {
     param $jnx;
     var $cmd = <get-chassis-inventory>;
     var $res = jcs:execute( $jnx, $cmd );
     var $model-full = $res/chassis/description;
     var $model = jcs:split("-", $model-full);
-    <func:result select="$model[1]">; 
+    <func:result select="$model[1]">;
 }
 
-<func:function name="ztp:junos-version"> {
-    param $jnx;
-    var $cmd = <get-software-information>;
-    var $res = jcs:execute( $jnx, $cmd );
-    var $version-full = $res/package-information[name="junos"]/comment;
-    var $version = jcs:split(" ", $version-full);
-    var $version-clean = jcs:split("\\[", $version[2]);
-    <func:result select="$version-clean[1]">;
-}
-
+/* ------------------------------------------------- */
+/* this function is used to get serial number */
+/* ------------------------------------------------- */
 <func:function name="ztp:serial-number"> {
     param $jnx;
     var $cmd = <get-chassis-inventory>;
     var $res = jcs:execute( $jnx, $cmd );
-    var $serial = $res/chassis/serial-number;
-    <func:result select="$serial">;
+    var $model-full = $res/chassis/serial-number;
+    <func:result select="$model-full[1]">;
 }
 
-<func:function name="ztp:is-already-running"> {
-    param $jnx;
-    var $cmd = <get-configuration> { <configuration> { <system> { <scripts> { <op> { <file name="ztp.slax">; } } } } }
-    var $res = jcs:execute( $jnx, $cmd );
-    var $status = $res/system/scripts/op/file[name="ztp.slax"]/description;
-    if ($status == "RUNNING") {
-        <func:result select="true()">;
-    } else {
-        <func:result select="false()">;
-    }
-}
-
+/* -------------------------------------------------- */
+/* this function is used to set activity tracker to 1 */
+/* -------------------------------------------------- */
 <func:function name="ztp:set-tracker"> {
     param $jnx;
-    var $cmd = <load-configuration action="merge"> { <configuration> { <system> { <scripts> { <op> { <file name="ztp.slax"> { <description> "RUNNING"; } } } } } }
+    var $cmd = <request-snmp-utility-mib-set> {
+        <object-type> "integer";
+        <instance> "staging";
+        <object-value> "1";
+    }
     var $res = jcs:execute( $jnx, $cmd );
     <func:result select="true()">;
 }
 
-<func:function name="ztp:end-script"> {
+/* -------------------------------------------------- */
+/* this function is used to set activity tracker to 0 */
+/* -------------------------------------------------- */
+<func:function name="ztp:remove-tracker"> {
     param $jnx;
-    var $cmd = <load-configuration action="merge"> { <configuration> { <system> { <scripts> { <op> { <file name="ztp.slax"> { <description> "STOPPED"; } } } } } }
+    var $cmd = <request-snmp-utility-mib-set> {
+        <object-type> "integer";
+        <instance> "staging";
+        <object-value> "0";
+    }
     var $res = jcs:execute( $jnx, $cmd );
-    <xsl:message terminate="yes">;
+    <func:result select="true()">;
 }
 
+/* ------------------------------------------------- */
+/* this function is used to get activity tracker */
+/* ------------------------------------------------- */
+<func:function name="ztp:is-already-running"> {
+    param $jnx;
+    var $cmd = <get-snmp-object> {
+        <snmp-object-name>"jnxUtilIntegerValue.115.116.97.103.105.110.103";
+    }
+    var $res = jcs:execute( $jnx, $cmd )//snmp-object/object-value;
+    if ( $res == "1" ) { <func:result select="true()">; }
+    else { <func:result select="false()">; }
+}
+
+/* --------------------------------------------------- */
+/* this function is used to terminate script properly */
+/* --------------------------------------------------- */
+<func:function name="ztp:end-script"> {
+    param $jnx;
+    var $res = ztp:remove-tracker($jnx);
+    expr jcs:close( $jnx );
+    <xsl:message terminate="yes">;
+    <func:result select="true()">;
+}
+
+/* ------------------------------------------------- */
+/* this function is used to test error              */
+/* and terminate script properly if error happens   */
+/* ------------------------------------------------- */
 <func:function name="ztp:end-script-if-error"> {
     param $jnx;
-    param $SYSLOG_TAG;
-    param $res;
-    param $msg;
-    if ($res//xnm:error) {
-        expr jcs:syslog("external.notice", $SYSLOG_TAG, $msg, " - ", $res//xnm:error/message);
-        expr ztp:end-script($jnx);
+    param $_SYSLOG_TAG_;
+    param $_result_;
+    param $_log_;
+    if( $_result_//self::xnm:error ) {
+        expr jcs:syslog( $SYSLOG, $_SYSLOG_TAG_, $_log_, " - STOP" );
+        expr jcs:syslog( $SYSLOG, $_SYSLOG_TAG_, "ERROR : ", $_result_//self::xnm:error/message );
+        expr ztp:end-script( $jnx );
+    }
+    <func:result select="true()">;
+}
+
+/* ----------------------------------------------------------------------------- */
+/* this function is used to load/commit changes to the configuration; no locking */
+/* ----------------------------------------------------------------------------- */
+<func:function name="ztp:load-config"> {
+    param $jnx;
+    param $load-cmd;
+    var $load-rsp = jcs:execute( $jnx, $load-cmd );
+    if( $load-rsp//self::xnm:error ) {
+        call syslog-messages( $header = "Unable to load configuration", $messages = $load-rsp//self::xnm:error/message );
+        <func:result select="$load-rsp//self::xnm:error">;
+    }
+    else {
+        var $commit-rsp = jcs:execute( $jnx, "commit-configuration" );
+        if( $commit-rsp//self::xnm:error ) {
+            call syslog-messages( $header = "unable to commit configuration", $messages = $commit-rsp//self::xnm:error/message );
+            <func:result select="exsl:node-set($commit-rsp//self::xnm:error)">;
+        }
+        else {
+            <func:result select="/null">;
+        }
     }
 }
 
-<func:function name="ztp:rm-previous"> {
-    param $jnx;
-    var $cmd = <request-system-storage-cleanup>;
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:rm-old"> {
-    param $jnx;
-    var $cmd = <request-system-storage-cleanup>;
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:disk-space"> {
-    param $jnx;
-    var $cmd = <get-system-storage>;
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:current-snapshot"> {
-    param $jnx;
-    var $cmd = <get-snapshot-information>;
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="$res/snapshot-information/comment">;
-}
-
-<func:function name="ztp:snapshot-recovery"> {
-    param $jnx;
-    var $cmd = <request-snapshot> { <recovery>; }
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">;
-}
-
-<func:function name="ztp:snapshot"> {
-    param $jnx;
-    var $cmd = <request-snapshot>;
-    var $res = jcs:execute( $jnx, $cmd );
-    <func:result select="true()">;
+/* -------------------------------------------------------------- */
+/* this template is used to dump warning/error messages to syslog */
+/* -------------------------------------------------------------- */
+template syslog-messages( $header, $messages ) {
+    expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, $header );
+    for-each( $messages ) {
+        expr jcs:syslog( $SYSLOG, $SYSLOG_TAG, "message[ ", ., "]");
+    }
 }
