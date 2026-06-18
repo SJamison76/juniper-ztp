@@ -25,6 +25,7 @@ echo "Setting permissions..."
 sudo chmod 755 /srv/ftp/code
 sudo chmod 755 /srv/ftp/slax
 sudo chmod 755 /srv/ftp/config
+sudo chmod -R 755 /srv/ftp/code/*  # Allow FTP read access to image subdirectories
 
 echo "Configuring isc-dhcp-server interface..."
 sudo sed -i 's/INTERFACESv4=""/INTERFACESv4="eth0"/' /etc/default/isc-dhcp-server

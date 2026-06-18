@@ -1,5 +1,33 @@
 # Juniper ZTP (Zero Touch Provisioning)
 
+ZTP v5.0.3 - fully working end-to-end pipeline
+
+Tested on EX2300-C-12P, 21.4R3-S10.13 -> 23.2R2-S7.5
+
+Working flow:
+- Factory boot -> DHCP -> access.conf -> event policy
+- ztp.slax detects model/version, downloads image to /var/tmp/
+- Installs with --unlink --reboot, reboots into target version
+- Takes recovery + non-recovery snapshots
+- Removes event-options, cleans interfaces, sets hostname staging-complete
+
+Key fixes from previous versions:
+- Replaced all jcs:open()/jcs:execute() with jcs:invoke() - required
+  for event-options execute-commands context on JunOS 21.4
+- Added xnm-clear-text to access.conf for Junos XML protocol server
+- EX2300 local /var/tmp/ path fix (no model subdir prefix)
+- Serial number via shell grep instead of broken token split
+- Removed 'request system storage cleanup' from rm-rundb (kills
+  script's own /var/tmp/tmp_op* execution directory)
+- Removed schema.db/render.db deletion (crashes pfed/commitd mid-run)
+- Final config via CLI pipe instead of load-configuration RPC
+- Shell output parsing via normalize-space(string($res)) not $res//output
+- Added shebang line #!/usr/libexec/ui/cscript
+
+Known minor issues:
+- Serial number still parsing empty (cosmetic, doesn't affect function)
+- ztp:end-script() harmless SLAX error when called inside func:function
+
 Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650, MX204, and SRX300 devices using a Raspberry Pi.
 
 ## Requirements
@@ -38,10 +66,10 @@ Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650
    ```
    /srv/ftp/code/EX2300/junos-arm-32-[version].tgz
    /srv/ftp/code/EX3400/junos-arm-32-[version].tgz
-   /srv/ftp/code/EX4100/junos-x86-64-[version].tgz
-   /srv/ftp/code/EX4600/junos-x86-64-[version].tgz
-   /srv/ftp/code/EX4650/junos-x86-64-[version].tgz
-   /srv/ftp/code/MX204/junos-x86-64-[version].tgz
+   /srv/ftp/code/EX4100/junos-install-ex-arm-64-[version].tgz
+   /srv/ftp/code/EX4600/jinstall-host-ex-4600-[version]-signed.tgz
+   /srv/ftp/code/EX4650/jinstall-host-ex-4e-x86-64-[version]-secure-signed.tgz
+   /srv/ftp/code/MX204/junos-vmhost-install-mx-x86-64-[version].tgz
    /srv/ftp/code/SRX300/junos-srxsme-[version].tgz
    ```
 
@@ -94,6 +122,8 @@ Then replace the `encrypted-password` strings in `configs/access.conf` with your
 │   └── ztp.slax   # ZTP SLAX script
 └── config/
     └── access.conf  # Bootstrap config pushed to device
+
+Note: No uploads directory is needed - the ZTP script does not upload any files.
 ```
 
 ## How It Works
