@@ -28,18 +28,18 @@ Known minor issues:
 - Serial number still parsing empty (cosmetic, doesn't affect function)
 - ztp:end-script() harmless SLAX error when called inside func:function
 
-Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650, MX204, and SRX300 devices using a Raspberry Pi.
+Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650, MX204, and SRX300 devices.
 
 ## Requirements
 
-- Raspberry Pi running Raspberry Pi OS (Debian-based)
-- Network interface (`eth0`) connected to switch management network
+- Debian-based Linux machine (tested on Geekom A5 running Ubuntu 24.04)
+- Network interface (`enp2s0`) connected to switch staging network at `192.168.10.1/24`
 - Junos image files (downloaded separately from Juniper support portal)
 
 ## Supported Devices
 
-| Model | Junos Image Format |
-|-------|-------------------|
+| Model  | Junos Image Format |
+|--------|--------------------|
 | EX2300 | junos-arm-32-[version].tgz |
 | EX3400 | junos-arm-32-[version].tgz |
 | EX4100 | junos-install-ex-arm-64-[version].tgz |
@@ -75,7 +75,7 @@ Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650
 
 4. Update target versions in `slax/ztp.slax` to match the images you placed in the FTP directories:
    ```
-   param $ex2300 = "23.4R2-S8.7";
+   param $ex2300 = "23.2R2-S7.5";
    param $ex3400 = "18.2R3-S2.9";
    param $ex4100 = "23.4R2-S8.7";
    param $ex4600 = "18.3R2.7";
@@ -84,9 +84,9 @@ Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650
    param $srx300 = "23.4R2-S8.7";
    ```
 
-5. Update IP addresses in `setup/dhcpd.conf` to match your network (default is `192.168.10.x/24`).
+5. Update IP addresses in `setup/kea-dhcp4.conf` if your network differs from the default `192.168.10.x/24`.
 
-6. Update passwords in `configs/access.conf` (see Password section below).
+6. Update passwords in `configs/access.conf` (see Credentials section below).
 
 ## Default Credentials
 
@@ -104,7 +104,7 @@ To generate a new encrypted password hash on any Juniper device:
 request system set-encrypted-password
 ```
 
-Then replace the `encrypted-password` strings in `configs/access.conf` with your own hashes. You can also add or remove users as needed.
+Then replace the `encrypted-password` strings in `configs/access.conf` with your own hashes.
 
 ## FTP Directory Structure
 
@@ -114,38 +114,53 @@ Then replace the `encrypted-password` strings in `configs/access.conf` with your
 │   ├── EX2300/    # EX2300/EX2300-C images
 │   ├── EX3400/    # EX3400 images
 │   ├── EX4100/    # EX4100 images
-│   ├── EX4600/    # EX4600 images
+│   ├── EX4600/    # EX4600 images (aggcore)
 │   ├── EX4650/    # EX4650 images
 │   ├── MX204/     # MX204 images
 │   └── SRX300/    # SRX300 images
 ├── slax/
 │   └── ztp.slax   # ZTP SLAX script
 └── config/
-    └── access.conf  # Bootstrap config pushed to device
-
-Note: No uploads directory is needed - the ZTP script does not upload any files.
+    ├── access.conf   # Bootstrap config for access-layer devices
+    └── aggcore.conf  # Bootstrap config for EX4600/QFX (optional)
 ```
 
 ## How It Works
 
 1. Switch boots with factory defaults and sends a DHCP request
-2. DHCP server identifies the device type via vendor class identifier and hands out ZTP options
+2. Kea DHCP server identifies the device via vendor class identifier (option 60) and assigns it to the correct pool
 3. Switch downloads and applies `config/access.conf` via FTP
-4. Event policy runs the SLAX script every 120 seconds
-5. SLAX script identifies the device model, checks current Junos version against target
-6. If upgrade/downgrade needed, script downloads the correct image from the model subdirectory and installs it
+4. Event policy fires the SLAX script every 300 seconds
+5. SLAX script identifies the device model and checks current Junos version against the target
+6. If upgrade needed, script downloads the correct image from the model subdirectory to `/var/tmp/` and installs it
 7. Switch reboots into new image
-8. SLAX script runs again, confirms version is correct, takes snapshots, sets hostname to `staging-complete` and removes event policy
+8. SLAX script runs again, confirms version is correct, takes recovery and non-recovery snapshots, sets hostname to `staging-complete` and removes the event policy
 
 ## Connecting the Switch
 
-- During ZTP the switch uses `irb.0` or `vme.0` for DHCP — connect the Pi to any regular switch port (e.g. `ge-0/0/0`)
-- Once `access.conf` is applied, the switch configures `me0` with DHCP for management access
+- During ZTP the switch uses `irb.0` or `vme.0` for DHCP — connect the Geekom to any regular switch port (e.g. `ge-0/0/0`)
+- Once `access.conf` is applied, the switch uses `me0` with DHCP for management
 - The SLAX script communicates via whichever interface has connectivity to `192.168.10.1`
+
+## Services
+
+```bash
+# Check status
+sudo systemctl status vsftpd
+sudo systemctl status kea-dhcp4-server
+
+# Restart
+sudo systemctl restart vsftpd
+sudo systemctl restart kea-dhcp4-server
+
+# Watch DHCP leases live
+sudo journalctl -fu kea-dhcp4-server
+```
 
 ## Notes
 
-- The DHCP server must be running on the Pi (`sudo systemctl start isc-dhcp-server`)
-- The FTP server must be running on the Pi (`sudo systemctl start vsftpd`)
-- Directory names in `/srv/ftp/code/` must be UPPERCASE to match the model names returned by the SLAX script
-- SNMP must be enabled on the device for the tracker functions to work — this is handled automatically by `access.conf`
+- Directory names in `/srv/ftp/code/` must be UPPERCASE to match model names returned by the SLAX script
+- SNMP utility MIB must be accessible for the script tracker to work — handled automatically by `access.conf`
+- `aggcore.conf` is optional — only needed if staging EX4600 or QFX devices
+- The Junos rule of 3 applies — if a device is more than 3 major releases behind the target, stage to an intermediate version first
+- MX204 vendor-class-identifier string has not been verified in production — confirm with `sudo journalctl -fu kea-dhcp4-server` when first staging an MX204
