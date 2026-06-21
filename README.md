@@ -32,7 +32,7 @@ Automated provisioning system for Juniper EX2300, EX3400, EX4100, EX4600, EX4650
 
 ## Requirements
 
-- Debian-based Linux machine (tested on Geekom A5 running Ubuntu 24.04)
+- Debian-based Linux machine (tested on Ubuntu 26.04)
 - Network interface (`enp2s0`) connected to switch staging network at `192.168.10.1/24`
 - Junos image files (downloaded separately from Juniper support portal)
 
